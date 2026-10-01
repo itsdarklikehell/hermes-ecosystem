@@ -106,6 +106,23 @@ OPENROUTER_API_KEY=sk-or-... node scripts/test-rag.js
 | `OPENROUTER_MODEL` | Override primary LLM model | No (default: `deepseek/deepseek-v4-flash`) |
 | `OPENROUTER_FALLBACK_MODELS` | Comma-separated fallback chain | No (default: `google/gemini-3-flash-preview,google/gemini-3.1-flash-lite-preview`) |
 
+## :film_projector: Development visualization
+
+Bekijk de [Gource development video](https://github.com/itsdarklikehell/hermes-ecosystem/releases) voor een visuele tijdlijn van de projectgeschiedenis.
+
+Om de video lokaal te genereren (vereist gource ≥ 2023 en ffmpeg):
+```bash
+cd /pad/naar/hermes-ecosystem
+gource --seconds-per-day 2 -1920x1080 --auto-skip-seconds 1 \
+  --hide-users --hide-filenames --title "Hermes Atlas development timeline" \
+  --output-ppm-stream - --output-framerate 60 2>/dev/null | \
+ffmpeg -y -r 60 -i - -c:v libx264 -preset fast -crf 23 \
+  -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart \
+  hermes-ecosystem_gource_1080p.mp4 2>/dev/null
+```
+
+De GitHub Actions workflow (`.github/workflows/gource.yaml`) genereert de video automatisch bij elke push naar `main` en bij handmatige trigger.
+
 ## Contributing
 
 Found a Hermes Agent project that should be in the map? [Open an issue](https://github.com/ksimback/hermes-ecosystem/issues) with the GitHub URL. Filtering criteria:
