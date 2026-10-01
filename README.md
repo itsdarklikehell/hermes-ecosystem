@@ -140,3 +140,11 @@ Site code: MIT. Research content: CC BY 4.0. Repo descriptions and metadata are 
 ---
 
 Built by [@ksimback](https://github.com/ksimback). Not officially affiliated with Nous Research — community project celebrating their work.
+
+## Gource Visualization
+
+De ontwikkelhistorie van dit project in een film:
+
+<video src="https://raw.githubusercontent.com/itsdarklikehell/hermes-ecosystem/main/hermes-ecosystem_gource_1080p.mp4" controls width="100%"></video>
+
+*De video wordt automatisch gegenereerd door de [Gource workflow](.github/workflows/gource.yml) bij elke push — rendered via [nbprojekt/gource-action@v1.3.0](https://github.com/marketplace/actions/gource-action) in 1080p. Het artifact is 30 dagen beschikbaar via Actions.*
