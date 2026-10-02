@@ -14,7 +14,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -37,14 +37,14 @@ jobs:
             hermes-ecosystem_gource_1080p.mp4
 
       - name: Upload Gource video
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: gource-video
           path: hermes-ecosystem_gource_1080p.mp4
           retention-days: 90
 
       - name: Upload video to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: hermes-ecosystem_gource_1080p.mp4
