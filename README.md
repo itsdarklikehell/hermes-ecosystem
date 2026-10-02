@@ -1,5 +1,11 @@
 # 🗺️ Hermes Atlas
 
+<p align="center">
+  <a href="https://github.com/itsdarklikehell/hermes-ecosystem/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/itsdarklikehell/hermes-ecosystem/ci.yml?style=for-the-badge&label=CI" alt="CI"></a>
+  <a href="https://github.com/itsdarklikehell/hermes-ecosystem/actions/workflows/gource.yml"><img src="https://img.shields.io/github/actions/workflow/status/itsdarklikehell/hermes-ecosystem/gource.yml?style=for-the-badge&label=Gource" alt="Gource"></a>
+  <a href="https://github.com/itsdarklikehell/hermes-ecosystem/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License: MIT"></a>
+</p>
+
 **The community-curated map of every tool, skill, and integration for [Hermes Agent](https://github.com/NousResearch/hermes-agent) by [Nous Research](https://nousresearch.com).**
 
 🌐 **Live site:** [hermesatlas.com](https://hermesatlas.com)
