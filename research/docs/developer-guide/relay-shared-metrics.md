@@ -114,11 +114,47 @@ Hermes turn, API, tool, and approval hooks
   -> immutable JSON delta package
 ```
 
-Hermes sends an empty `LLMRequest` into the metrics-owned lifecycle. This does not describe the separate managed-execution call through the native runtime documented above. The terminal metrics event contains the model identifier and provider route that Hermes used for the logical call, such as `nvidia/nemotron-3-ultra` through `openrouter`. These identifiers are lowercased and structurally bounded, but they are not normalized through a checked-in model catalog. Pricing and model-family classification belong to the metrics backend. Prompts, responses, endpoints, error text, session IDs, task IDs, and request IDs are not included in the metrics event or package. New calls use `hermes.model_route.count`. Since package schema v3 each route row also carries `call_role` (`primary` or `auxiliary`), `outcome` (`success`, `failed`, `cancelled`) and `error_class`: the error classifier's own `FailoverReason` value (`rate_limit`, `auth`, `context_overflow`, ...) for the last failed attempt of that logical call, or `none`. A `success` row with a non-`none` class is a call that recovered after that error. The previous `hermes.model_call.count` contract remains readable only so pending local counters created by older builds can be exported without losing data.
+Hermes sends an empty `LLMRequest` into the metrics-owned lifecycle. This does not describe the separate managed-execution call through the native runtime documented above. The terminal metrics event contains the model identifier and provider route that Hermes used for the logical call, such as `nvidia/nemotron-3-ultra` through `openrouter`. These identifiers are lowercased and structurally bounded, but they are not normalized through a checked-in model catalog. Pricing and model-family classification belong to the metrics backend. Prompts, responses, endpoints, error text, session IDs, task IDs, and request IDs are not included in the metrics event or package. New calls use `hermes.model_route.count`. Since package schema v3 each route row also carries `call_role` (`primary` or `auxiliary`), `outcome` (`success`, `failed`, `cancelled`) and `error_class`: the error classifier's own `FailoverReason` value (`rate_limit`, `auth`, `context_overflow`, ...) for the last failed attempt of that logical call, or `none`. A `success` row with a non-`none` class is a call that recovered after that error. Auxiliary calls (titles, compression, vision, ...) follow the same rules: one row per logical call however many fallback attempts it took, classified by the same classifier (an HTTP-200 body carrying a provider `error` object is classified from that object), `cancelled` with `none` when Hermes aborted it (`/stop`, Ctrl+C, an interrupt, shutdown), and `unknown` only when the classifier cannot name the failure. An auxiliary call that runs beside the turn (title generation) and finishes under the turn's own live scopes is still counted: its result closes the scope when the turn drains it. Auxiliary rows report `ttft_bucket` `unknown`: most auxiliary calls are not streamed. The previous `hermes.model_call.count` contract remains readable only so pending local counters created by older builds can be exported without losing data.
 
 The first consented session start emits an empty `hermes.client.active` Relay mark. The profile-scoped subscriber creates a random UUID install identity and uses a transactional compare-and-set to record at most one client-active counter in any rolling 24-hour window. The metric has no dimensions; Hermes version, OS family, architecture, and install method remain bounded package resources. Concurrent Hermes processes share the SQLite latch, so simultaneous starts cannot double-count one install. A later session or task can attempt the mark again, but the subscriber suppresses it until the rolling window expires.
 
 Each task run is a Relay `Function` scope named `hermes.task_run`, parented to the owning Hermes session. The start counter contains only bounded execution surface and entrypoint values plus, for gateway tasks, the built-in messaging `platform` (`telegram`, `discord`, `slack`, ...; platforms Hermes ships under `plugins/platforms/` by name, a `plugin-catalog/` platform by its catalog entry name only when the installer's own record proves a catalog install, every other plugin platform `plugin`, every other surface `none`). The terminal counter (`hermes.task_run.finished`) contains the start fields plus bounded outcome, end reason, termination status, and a `failure_class` for failed tasks: the provider `FailoverReason` when the turn died on a classified API error, otherwise a local class (`empty_response`, `context_compression`, `repeated_errors`, `exception`, `other`, ...). The same end event feeds `hermes.task_run.duration` with execution surface, outcome, duration bucket and provider-retry count bucket. Package v2 carried duration, retries and per-task model/tool call counts on the terminal row itself, which made almost every task its own row; call counts per turn live on `hermes.task_cost.count`. Raw exit reasons never leave the machine. Retries are additional provider attempts for the same Hermes API request ID; they do not inflate the logical model-call count. Tool calls are deduplicated by their Hermes tool-call ID after a terminal tool result is observed. The outer `AIAgent` execution boundary closes the task for normal returns, early returns, exceptions, and cancellations. Active task ownership follows the task ID if Hermes rotates its conversation session during context compression.
+
+The `entrypoint` dimension (on `hermes.task_run.started`, `hermes.task_run.finished` and `hermes.session.count`) says who dispatched the run, from a closed set:
+
+Value
+
+Meaning
+
+`interactive`
+
+A person in a chat UI: the `hermes` REPL, a `hermes chat -q` that seeds the REPL on a TTY, `--tui`, Desktop, ACP editors.
+
+`one_shot`
+
+A finite CLI run that answers one prompt and exits: `hermes -z` / `--oneshot`, `hermes chat -q` off a TTY or with `--oneshot`, `-Q` / `--quiet`. A person's shell line and a script looping it look the same, so both read `one_shot`. Bot Chat delivery turns (`hermes -p <profile> chat -c "Bot Chat" -Q`) are one-shot runs too: their author may be a person on another connection. Surface stays `cli`.
+
+`background`
+
+An unattended run a Hermes dispatcher spawned: a kanban worker (`HERMES_SESSION_SOURCE=kanban`) or an A2A forward (`--source a2a`).
+
+`delegated`
+
+A subagent run under a parent task or session (wins over the values above).
+
+`gateway_message`
+
+A messaging-platform message.
+
+`scheduled_task`, `batch`, `api`, `python`
+
+Cron, batch runner, API server, Python embedding.
+
+`other`, `unknown`
+
+Unattributable.
+
+A run is `one_shot` or `background` when its process carries the `HERMES_SINGLE_QUERY_SESSION` marker that the one-shot paths set (the same marker the session source and `cache_ttl: auto` read). Engagement (`hermes.engagement.*`) and the attended-only rows (task cost, tool usage per session, model friction) treat `one_shot` like `interactive`, as they did before the value existed; `background` and `delegated` runs are unattended and excluded there. Packages written before `one_shot` existed carry these runs as `interactive` and still validate. `hermes -z` leaves through `os._exit`, so it closes its metrics session before exiting rather than relying on the atexit hook.
 
 Each tool invocation is represented by a Relay tool lifecycle named `hermes.tool_call`. The terminal counter contains only bounded tool category, outcome and approval outcome; the same event feeds `hermes.tool_call.latency` with tool category, latency bucket and explicit retry-count bucket (package v2 carried latency and retries on the terminal row, one row per few calls). Hermes derives the category from the toolset already declared in its runtime registry; custom and unrecognized toolsets collapse to `other` rather than exporting tool or plugin names. The same terminal event also feeds `hermes.tool.usage.count` with `tool_name`, `outcome` and `error_class`. `tool_name` is exported only for tools declared in the repository's static `toolsets.TOOLSETS` (`toolsets.BUILTIN_TOOL_NAMES`, captured before any runtime custom toolset is created); MCP tools report `mcp` and every plugin or custom tool reports `plugin`. `error_class` maps Hermes's own `error_type` values (`tool_error`, `timeout`, `interrupted`, `invalid_arguments`, `blocked`, `contract_violation`); any other value, such as an exception class name, collapses to `exception`. Hermes does not infer retries from repeated tool names or adjacent calls; when the hook does not provide an explicit retry relationship, the retry bucket is `unknown`. Approval decisions are emitted as `hermes.tool_approval` marks and recorded as attributed to a tool call or explicitly `unattributed`. Non-built-in tool names, call IDs, arguments, results, commands, descriptions, and error text are not included in shared-metrics events or packages. A started tool that is still open when its task terminates is closed as failed, timed out, or cancelled and remains in the task's tool-count bucket.
 
@@ -177,9 +213,9 @@ Perceived latency per provider/model.
 
 `hermes.compression.count`
 
-trigger, outcome, context-fill bucket
+trigger, outcome, context-fill bucket, failure class
 
-How often compaction runs, how full contexts get, and whether it fails.
+How often compaction runs, how full contexts get, and whether it fails. `skipped` = nothing could fail: lock held elsewhere, nothing summarizable (no model call), user stop, or a newer attempt replaced it. Since package schema v4 the row also carries `failure_class`, the attempt log's own class name from a closed list: the skip reasons (`lock_contended`, `insufficient_messages`, `no_compressible_window`, `empty_post_handoff_window`, `explicit_interrupt`, `attempt_superseded`, `snapshot_stale`) on skipped rows; the failure reasons (`summary_auth_failure`, `summary_network_failure`, `summary_truncated_failure`, `summary_empty_content_failure`, `summary_overload_failure`, `summary_generation_aborted`, `summary_generation_failed`, `summary_overload_degraded`, `aux_model_fallback`, `feasibility_skip`, `stall_deterministic_fallback`, `stall_interrupted`, `would_grow`, `no_progress`, `commit_fence_cancelled`, `pool_saturated`, `session_split_failed`, `exception`, `rollback`) on failed rows; `none` on success. An exception's or rollback's Python type name is dropped (`exception:TimeoutError` reads `exception`), any other value reads `other`, a failure with no class `unknown`.
 
 `hermes.model_switch.count`
 
@@ -207,9 +243,9 @@ Which catalog skills, MCP servers and plugins get installed. `name` is a bundled
 
 `hermes.memory.op.count`
 
-op (`add`/`replace`/`remove`/`read`/`search`/`other`), provider (`builtin`, a bundled memory plugin, else `plugin`), origin (`foreground`/`background_review`), outcome (`success`/`failed`/`rejected`)
+op (`add`/`replace`/`remove`/`read`/`search`/`other`), provider (`builtin`, a bundled memory plugin, else `plugin`), origin (`foreground`/`background_review`), outcome (`success`/`failed`/`rejected`), failure class
 
-Is the learning loop writing memory, who asks for it (the user's turn or the background review), and how often writes are refused or fail. Never the memory text.
+Is the learning loop writing memory, who asks for it (the user's turn or the background review), and how often writes are refused or fail, and why. Since package schema v4 `failure_class` names the reason from a closed list mapped from each refusal/failure return of the built-in store: `no_match` (old\_text matched no entry), `ambiguous` (it matched several), `over_budget` (the write would pass the char limit), `would_empty` (a batch would remove the last entry), `drift` (the file holds text the store cannot round-trip), `read_failed` (the file exists but cannot be read), `retry_cap` (the per-turn retry budget is spent), `scan_blocked` (the content matched a threat pattern), `missing_content`, `missing_old_text`, `invalid_args`, `stale_entry` (a staged write's entry changed), `disabled` (that target is off in config), `staged` (held for the user's approval), `gate_refused` (the write-approval gate blocked it); `provider_error` / `exception` for a plugin provider's tool that returned an error or raised; `none` on success; `other`/`unknown` otherwise. A batch applies all or none, so every op row of a refused batch carries the class of the op that stopped it. Never the memory text, the old\_text or the error message.
 
 `hermes.curator.run.count`
 
@@ -233,7 +269,7 @@ Which sandboxes carry real work and how reliable each is. Terminal backends are 
 
 platform, event (`connect_ok`/`connect_failed`/`reconnect`/`disconnect`), error class (`auth`/`network`/`rate_limited`/`config`/`other`)
 
-Which messaging platforms fail to connect or drop, and why. Classified from exception types, HTTP statuses and Hermes's own fatal codes, never error text.
+Which messaging platforms fail to connect or drop, and why. `connect_failed` counts a failed-connect episode once per profile, platform and UTC day (the reconnect watcher's retries are not new rows; the next success ends the episode, and a platform still failing the next day counts again), with the error class of the episode's first failure. Classified from exception types, HTTP statuses and Hermes's own fatal codes, never error text.
 
 `hermes.platform.delivery`
 
@@ -487,9 +523,9 @@ Which toolsets should be on by default: the model called a tool Hermes ships tha
 
 `hermes.provider_setup.count`
 
-provider (catalog name; custom endpoints read `custom`), surface (`cli_setup`, `cli_model`, `tui`, `desktop`, `dashboard`), event (`started`, `completed`, `failed`, `abandoned`), failure class (`auth`, `network`, `no_models`, `cancelled`, `other`; `none` unless failed)
+provider (catalog name; custom endpoints read `custom`), surface (`cli_setup`, `cli_model`, `tui`, `desktop`, `dashboard`), event (`started`, `completed`, `failed`, `abandoned`), failure class (`auth`, `network`, `no_models`, `other`; `none` unless failed; `cancelled` is no longer recorded, a cancel is `abandoned`)
 
-Where connecting a provider breaks down. `started` counts once a provider is picked; the flow's end is recorded by the surface that ran it. In the CLI pickers Esc ends the flow `failed`/`cancelled`; Back (Left arrow) keeps it open, so picking the same provider again continues it (one `started`), while picking another provider or leaving the command ends it `cancelled`. A flow nobody finished leaves a local marker that the next setup start or Hermes start in the profile reports as `abandoned` (its process is gone, or it has been pending over an hour); an OAuth device code left to expire is also `abandoned`. A new or changed provider API key saved from a form (TUI/Desktop/dashboard) and a newly added custom endpoint start and complete in one action; clearing a key, re-saving the same key, editing an existing endpoint, ecosystem tokens (`GITHUB_TOKEN`, `GH_TOKEN`, `HF_TOKEN`) and keys a tool's settings panel also asks for (e.g. `GEMINI_API_KEY`, `XAI_API_KEY`, `DEEPINFRA_API_KEY`) are not counted from the generic key form (the Desktop's onboarding and model settings mark their saves as a provider connection, so those count). Never a key, token, base URL or error text. Leaving the provider picker before choosing one is not counted.
+Where connecting a provider breaks down. `started` counts once a provider is picked; the flow's end is recorded by the surface that ran it. A flow the user walked away from is `abandoned`, never `failed`: Esc or Ctrl-C in the CLI pickers, Cancel/Back on a Desktop or dashboard sign-in, consent declined on the provider's page, and a sign-in code left to expire (any provider). Back (Left arrow) in the CLI keeps the flow open, so picking the same provider again continues it (one `started`), while picking another provider or leaving the command ends it `abandoned`. A flow nobody finished leaves a local marker that the next setup start or Hermes start in the profile reports as `abandoned` (its process is gone, or it has been pending over an hour). A Desktop/dashboard sign-in that dies mid-poll keeps the class of the error that ended it (`network` for a dropped connection, `auth` for a refusal), not a bare `other`. A new or changed provider API key saved from a form (TUI/Desktop/dashboard) and a newly added custom endpoint start and complete in one action; clearing a key, re-saving the same key, editing an existing endpoint, ecosystem tokens (`GITHUB_TOKEN`, `GH_TOKEN`, `HF_TOKEN`) and keys a tool's settings panel also asks for (e.g. `GEMINI_API_KEY`, `XAI_API_KEY`, `DEEPINFRA_API_KEY`) are not counted from the generic key form (the Desktop's onboarding and model settings mark their saves as a provider connection, so those count). Never a key, token, base URL or error text. Leaving the provider picker before choosing one is not counted.
 
 `hermes.feature_adoption.count`
 
@@ -510,7 +546,7 @@ $HERMES_HOME/telemetry/shared_metrics/metrics.sqlite3
 $HERMES_HOME/telemetry/shared_metrics/outbox/*.json
 ```
 
-The database keeps transactional aggregate and package-outbox state. Package files are immutable delta documents that conform to a closed JSON schema and are written with atomic replacement as compact JSON (`jq .` pretty-prints one). Once the ingest has accepted or refused a package, the database keeps only its send state and drops its copy of the body; the file is the local history copy. Each package records the Hermes version, OS family, architecture, and install method as bounded client resources. Unrecognized platform or installation values are exported as `unknown`; raw platform strings, hostnames, and paths are never included. Fully packaged aggregate rows and successfully exported package rows and files are retained locally for 30 days. Pending package rows and counters with unexported deltas are never pruned. Package schemas v1 and v2 remain unchanged for existing outbox files. New packages use v3, which also accepts the v2 field sets of `hermes.model_route.count`, `hermes.tool_call.count` and the task counters so counters recorded before an upgrade drain safely. Vocabularies derived from in-repo registries (tool names, platforms, memory providers, error classes) are bounded by pattern in the JSON schema; the authoritative allowlist is `shared_metrics_contract.py`.
+The database keeps transactional aggregate and package-outbox state. Package files are immutable delta documents that conform to a closed JSON schema and are written with atomic replacement as compact JSON (`jq .` pretty-prints one). Once the ingest has accepted or refused a package, the database keeps only its send state and drops its copy of the body; the file is the local history copy. Each package records the Hermes version, OS family, architecture, and install method as bounded client resources. Unrecognized platform or installation values are exported as `unknown`; raw platform strings, hostnames, and paths are never included. Fully packaged aggregate rows and successfully exported package rows and files are retained locally for 30 days. Pending package rows and counters with unexported deltas are never pruned. Package schemas v1, v2 and v3 remain unchanged for existing outbox files. New packages use v4, which adds `failure_class` to `hermes.compression.count` and `hermes.memory.op.count` and still accepts their v3 field sets, as v3 accepted the v2 field sets of `hermes.model_route.count`, `hermes.tool_call.count` and the task counters, so counters recorded before an upgrade drain safely. Vocabularies derived from in-repo registries (tool names, platforms, memory providers, error classes) are bounded by pattern in the JSON schema; the authoritative allowlist is `shared_metrics_contract.py`.
 
 Each package contains an `install_id` generated as a random UUID. Despite the schema field name, its current scope is one `HERMES_HOME`, so it is more precisely a persistent pseudonymous profile identifier. It is not derived from hardware, account, host, path, or credential data. It remains stable across packages from that profile and can therefore link those local packages. Deleting `$HERMES_HOME/telemetry/shared_metrics` resets the identifier together with all aggregates and package files.
 
@@ -577,7 +613,9 @@ Web dashboard
 
 A banner above every page, for the profile being managed.
 
-"No thanks" is the default in the terminal, so pressing Enter never opts anyone in. Esc in the terminal and the dashboard banner's ✕ leave the question open, so it is asked again next time. Answering on any surface writes both keys to the profile's `config.yaml`, and a profile that already carries either key is never asked again. A managed install is never offered. To change the answer later, use `hermes setup telemetry`, `hermes tools`, or Desktop's Settings › Safety › Privacy & network.
+"No thanks" is the default in the terminal, so pressing Enter never opts anyone in. Esc in the terminal and the dashboard banner's ✕ leave the question open, so it is asked again next time. Answering on any surface writes both keys to the profile's `config.yaml`, plus `offer_version`, and a profile that already carries either key is never asked again. A managed install is never offered.
+
+One exception: before the type-ahead fix, an Enter pressed while `hermes chat` was starting could save "No thanks" before the question appeared. A "No thanks" recorded without `offer_version` is therefore offered once more on every surface, with a note saying why. Any response settles it for good, including Esc or the banner's ✕, which keep "No thanks". Answers that opted in are never re-asked. To change the answer later, use `hermes setup telemetry`, `hermes tools`, or Desktop's Settings › Safety › Privacy & network.
 
 **A package is only sent when its whole period falls inside a recorded consent window.** Consent is stored as explicit intervals in the shared- metrics SQLite store (`send_consent_windows`): a window opens when `send: true` is first observed, is confirmed forward by every later observation, and closes — at the last _confirmed_ moment, never at the wall clock — when `send: false` is observed. A single reconciler derives this table from the config on every process start, so wizard changes, hand-edits to `config.yaml`, and mid-pass revocations all take the same path, and no transition can be missed by any of them.
 

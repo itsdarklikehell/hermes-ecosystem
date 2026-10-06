@@ -1055,14 +1055,6 @@ For optional extras declared in hermes-agent's `pyproject.toml`, use `extraDepen
 services.hermes-agent.extraDependencyGroups = [ "messaging" ];
 ```
 
-```
-# Enable a memory provider
-services.hermes-agent = {
-  extraDependencyGroups = [ "honcho" ];
-  settings.memory.provider = "honcho";
-};
-```
-
 These groups join the core dependency resolution at build time. Conflicting requirements can still fail that resolution. The table lists common groups; `pyproject.toml` is authoritative for the complete list and platform markers.
 
 Group
@@ -1108,10 +1100,6 @@ AWS Bedrock (boto3)
 `azure-identity`
 
 Azure Entra ID auth
-
-`honcho`
-
-Honcho memory provider
 
 `modal`
 
@@ -1182,7 +1170,7 @@ External flakes can override the package directly:
     nixpkgs.overlays = [ hermes-agent.overlays.default ];
     # Then:
     #   pkgs.hermes-agent.override { extraPythonPackages = [...]; }
-    #   pkgs.hermes-agent.override { extraDependencyGroups = [ "honcho" ]; }
+    #   pkgs.hermes-agent.override { extraDependencyGroups = [ "voice" ]; }
   };
 }
 ```
@@ -1601,7 +1589,7 @@ Python packages added to PYTHONPATH for entry-point plugin discovery. Use the se
 
 `[]`
 
-pyproject.toml optional extras to include in the sealed venv (e.g. `["honcho"]`). Resolved by uv — no collisions
+pyproject.toml optional extras to include in the sealed venv (e.g. `["voice"]`). Resolved by uv — no collisions
 
 `restart`
 

@@ -146,6 +146,8 @@ interface PluginContext {
   register: (c: PluginContribution) => () => void
   /** Register several at once; the returned disposer removes all of them. */
   registerMany: (cs: PluginContribution[]) => () => void
+  /** Own entry (+ sub-pages) under Settings → Plugins. Removed on disable/unload. */
+  registerSettingsPage: (page: PluginSettingsPage) => () => void
   /** REST to this plugin's own backend namespace (`/api/plugins/<id>`). */
   rest: <T>(path: string, opts?: PluginRestOptions) => Promise<T>
   /** Live WebSocket to this plugin's own namespace. Returns a disposer. */
@@ -252,11 +254,23 @@ Composer
 
 render slots, or middleware / attachment providers
 
+Model menu rows
+
+`MODEL_MENU_ROW_AREA`
+
+`data: ModelMenuRowContribution` — a leading icon / trailing badge per model
+
 Appearance settings
 
 `APPEARANCE_AREAS.extra`
 
 `render` — controls appended to Settings → Appearance
+
+Plugin settings page
+
+`SETTINGS_PLUGINS_AREA` (`'settings.plugins'`)
+
+Use `ctx.registerSettingsPage({ id, title, render, icon?, order?, children? })` — your own entry (with sub-pages) under Settings → Plugins
 
 ### Panes
 
@@ -403,6 +417,27 @@ host.onEvent('gateway.ready', () => {
 ```
 
 Both doors persist per profile, so a plugin-driven switch sticks exactly like a manual pick. To tint the _active_ theme rather than replace it, use `setAccentOverride(hex)` and clear it in `ctx.onDispose` — the standalone [Accent Picker](https://github.com/NousResearch/hermes-desktop-accent-picker) plugin is the worked example (it is also a complete, installable disk plugin).
+
+#### Styling the chat switch — `data-session-switching`
+
+Opening a chat places its transcript in steps: the session loads, the rows land, then the restored scroll position settles a few frames later. A theme that wants that hidden (or faded) targets one documented attribute instead of watching the route or the DOM: core sets `data-session-switching="true"` on the chat surface root (`[data-chat-surface]`) from the frame the switch starts until the new transcript's rows are on screen and its scroll position has settled, then removes it.
+
+```
+/* Hide the transcript while it is being placed, fade it in when it lands. */
+:root[data-hermes-theme="noir"] [data-chat-surface] [data-slot="aui_thread-viewport"] {
+  transition: opacity 0.12s ease-out;
+}
+:root[data-hermes-theme="noir"] [data-chat-surface][data-session-switching] [data-slot="aui_thread-viewport"] {
+  opacity: 0;
+  transition: none;
+}
+```
+
+-   **Per surface.** The primary chat and every tile has its own `[data-chat-surface]`; the attribute marks only the one switching. Narrow to the primary pane with `[data-composer-target="main"]`.
+-   **Always ends.** It is held by core's own load and scroll-restore phases: the load phase ends when the transcript arrives or the resume gives up, the restore phase on settle (a bounded number of frames) or the first user scroll/key/pointer input, and both on unmount — a theme that hides content under it cannot strand the chat hidden. A brand-new empty draft never sets it.
+-   **The contract is the attribute.** Target `[data-session-switching]` and the `data-chat-surface` / `data-slot` hooks; internal class names are not a contract and change without notice. Do not toggle the attribute yourself or reproduce it with a route listener or `MutationObserver` (catalog rule 8).
+
+This replaces the t3-code-theme `installSwitchFade` pattern (a focus-store listener plus a `requestAnimationFrame` loop that polled the transcript's rows and scroll position, then toggled its own root attribute): the CSS above is the whole migration.
 
 ### Composer extensions
 
@@ -575,6 +610,41 @@ register(ctx) {
 
 The reasoning-pill visibility CSS the plugin also injected has no hook; it is only needed if the app ever hides that label at narrow widths.
 
+#### Model menu row decorations
+
+`MODEL_MENU_ROW_AREA` puts a per-model mark inside the native model menu — the one the composer's pill opens, and every other surface that renders `ModelCatalogMenu`. A contribution supplies `decorate(row)`; core paints what it returns in two fixed slots of the row: a **leading icon** before the model name and a **trailing badge** after core's own chips. The row's markup, name, star, submenu and click stay core's.
+
+```
+import { MODEL_MENU_ROW_AREA, type ModelMenuRowContribution } from '@hermes/plugin-sdk'
+
+interface ModelMenuRowContext {
+  provider: string  // provider slug: 'anthropic', 'openrouter', …
+  model: string     // the model id the row commits
+  label: string     // the display name core paints on the row
+}
+interface ModelMenuRowDecoration {
+  icon?: ReactNode  // element (<img>, <svg>, a component) or short text, drawn in a 1rem box
+  badge?: string    // plain text chip
+}
+
+ctx.register({
+  area: MODEL_MENU_ROW_AREA,
+  id: 'provider-marks',
+  data: {
+    decorate: ({ provider }) => {
+      const src = PROVIDER_ICONS[provider]   // data: URL of an SVG mark
+      return src ? { icon: <img alt="" src={src} /> } : null
+    }
+  } satisfies ModelMenuRowContribution
+})
+```
+
+**Arbitration.** Decorators run in registry order, **per slot**: the first one that returns a usable `icon` fills the icon slot, the first usable `badge` the badge slot, so an icon plugin and a pricing-badge plugin compose on the same row. `null` (or nothing usable) declines. Only a React element or a non-empty string is an icon and only a non-empty string is a badge; anything else is ignored rather than rendered. A decorator that **throws** declines too, and an icon component that throws while rendering blanks only its own slot (it sits in its own error boundary) — a broken plugin can never take the menu down. `decorate()` re-runs only when the registry or the row's provider/model/label changes, so keep it a pure lookup.
+
+**Teardown.** An ordinary data contribution: the `ctx.register` disposer (and plugin disable/reload) removes it and the rows repaint bare.
+
+**Migrating t3-code-theme.** Its provider marks were painted into the open menu by a `MutationObserver` that located the rows in the menu's DOM and wrote mask images onto them. The same marks come from `decorate({ provider })` returning `{ icon: <img alt="" src={providerSvgDataUrl(provider)} /> }` — no DOM reads, and the row keeps working when the menu's markup changes.
+
 ### Appearance settings
 
 `APPEARANCE_AREAS.extra` renders contributions at the end of **Settings → Appearance**, after the built-in sections. It is the seam for a plugin that used to inject nodes into that page or drive its widgets through React internals.
@@ -599,6 +669,32 @@ Migrations for the plugins that motivated this slot:
 
 -   **better-session-appearance** — replace the fiber walk that harvests the Appearance submenu's `{ onChange, swatches }` and the `clearBtn.after(...)` / `host.appendChild(panel)` injection into the app dropdown with one `ctx.register({ area: APPEARANCE_AREAS.extra, id: 'rules', render })` whose card renders `<ColorSwatches swatches={PROFILE_SWATCHES} value onChange />` plus its bold/glyph/auto-rule controls; drop the `data-better-session-appearance` attribute writes and the dropdown `max-height` overrides.
 -   **hermes-appearance-hub** — mount its paper-texture / font / intro-copy controls as an `APPEARANCE_AREAS.extra` card instead of a status-bar menu that reaches into Settings; the settings _values_ still go through `host.settings` (allowlisted keys) and `THEMES_AREA`.
+
+### Plugin settings pages (Settings → Plugins)
+
+**Settings → Plugins** is the one home for plugin preferences, laid out like WoW's AddOns options: every plugin with settings gets its own entry in the Settings rail, and selecting it folds out that plugin's sub-pages. Don't build a preferences dialog, pane, or sidebar row for settings. Register a page:
+
+```
+ctx.registerSettingsPage?.({
+  id: 'settings',            // unique within your plugin
+  title: 'Weather',          // rail label + breadcrumb
+  icon: 'cloud',             // codicon name; a plug when omitted
+  order: 0,                  // ascending; ties sort by title
+  render: () => jsx(General, {}),        // the entry's landing page
+  children: [                // optional sub-pages, listed in this order
+    { id: 'units', title: 'Units', render: () => jsx(Units, {}) },
+    { id: 'alerts', title: 'Alerts', render: () => jsx(Alerts, {}) }
+  ]
+})
+```
+
+-   The page lives as long as the plugin. Disable or unload removes it, the same as every other `ctx` registration, and the returned disposer removes it early.
+-   Build the page from the settings primitives (`ToggleRow`, `ListRow`, `SegmentedControl`, `Select*`) and persist with `ctx.storage` so it looks like core Settings. Each page renders inside its own error boundary.
+-   `registerSettingsPage` is new; the `?.` keeps the plugin loading on older hosts. On those hosts, `ctx.register({ area: SETTINGS_PLUGINS_AREA, id, title, render, data: { icon, children } })` is the same thing spelled out.
+-   Deep link: `host.navigate(pluginSettingsHref('<your-plugin-id>', 'units'))` (`/settings?tab=plugins&plugin=<id>&ppage=<sub-page>`). Sub-page ids are yours: none is reserved.
+-   **Agent plugins get a page automatically.** A `config_schema` in `plugin.yaml` renders as a form under Settings → Plugins, saved through `plugins.manage settings` for the profile the Settings scope selector targets (`/settings?tab=plugins&agent=<key>`). The gear on the plugin's Capabilities → Plugins row opens that page for the profile Capabilities has selected. In a unified package (agent half plus `desktop/plugin.js`), when the desktop half also registers a page, the schema form shows up as that entry's **Agent settings** sub-page, so the package has one entry.
+
+`src/plugins/hello-runtime/plugin.runtime.js` is a complete runtime example: one page and two sub-pages, backed by `ctx.storage`.
 
 ### Embedding external content
 
@@ -840,6 +936,7 @@ The other doors (`openExternal`, `revealPath`, `writeClipboard`) resolve `false`
 ```
 type DesktopSettingValues = {
   'backdrop.v1': boolean
+  chatTextScale: 90 | 100 | 110 | 125 | 150 | 175 // percent; Appearance → Chat Text Size
   'composerPopout.gesturesEnabled': boolean
   'intro-splash.v1': boolean
   'reasoning.collapsedByDefault': boolean
@@ -861,6 +958,13 @@ register(ctx) {
   // subscribed, so YOU retire the listener — otherwise it outlives a disable/reload.
   ctx.onDispose(dispose)
 }
+```
+
+`chatTextScale` is the user's chat text size (default `110`). It scales the transcript and composer text (and its line height) through the host's `--chat-text-scale` CSS variable, so a plugin or theme that wants larger/smaller reading text sets the same preset the user would pick; pane geometry, row spacing and chrome stay core-owned. Only the six presets are accepted: an off-preset number (`112`, `'125'`) throws instead of being snapped, so a typo can't silently reset the user's size. Like every key here it is the user's preference, not a plugin override: write it from an explicit user action in your UI (never at `register`), and read/subscribe to adapt your own rendering.
+
+```
+const dispose = host.settings.subscribe('chatTextScale', pct => setMyFontScale(pct / 100))
+ctx.onDispose(dispose)
 ```
 
 Arbitration: the allowlist above is closed. An unknown key or a value outside the key's type throws **synchronously** (`Unsupported desktop setting: …` / `Invalid value for desktop setting: …`) and nothing is written — `host.settings` never touches `localStorage` directly, so it cannot bypass a store's schema or migration. Feature-detect `host.settings` when supporting older Desktop builds.
@@ -890,6 +994,12 @@ theme selection is per window/profile and arbitrated by the app, not a flat pref
 the app's Plugins tab (a read-only view is a separate SDK hook)
 
 a plugin toggling another plugin's enable state is plugins interfering with each other
+
+chat / composer width, turn spacing, session-row geometry
+
+nothing yet — these become keys only once they exist as core Appearance preferences (chat width: #55287)
+
+layout is host-owned; a plugin-owned geometry contract would make every theme a layout contract
 
 `toolView.technical`, `embed-mode`, `titlebarAppActions`, `translucency.v2`, `user-bubble-transparency.v1`, `hermesDesktop.zoom.*`
 
@@ -1157,7 +1267,7 @@ For gateway-wide data (not your own namespace), use `host.request` (JSON-RPC) an
 
 ## Settings, enable state, and storage
 
-Every plugin — enabled or not — inventories in **Capabilities → Plugins**, where the user toggles it live (no app restart), reveals its folder, or rescans. The user's choice is remembered:
+Every plugin — enabled or not — inventories in **Capabilities → Plugins**, where the user toggles it live (no app restart), reveals its folder, or rescans. A plugin's own preferences belong in **Settings → Plugins** ([plugin settings pages](#plugin-settings-pages)). The user's choice is remembered:
 
 -   No choice yet → the plugin's own `defaultEnabled` (default `true`). Set `defaultEnabled: false` to ship an opt-in plugin that stays dark until the user flips it on.
 -   Explicit choice → persisted and honored across restarts. A disabled plugin stays disabled — don't fight it; the user turned you off.
@@ -1217,11 +1327,11 @@ Plugin contract
 
 Area constants
 
-`PANES_AREA`, `ROUTES_AREA`, `SIDEBAR_NAV_AREA`, `STATUSBAR_AREAS`, `TITLEBAR_AREAS`, `WORKSPACE_PAGE_HEADER_AREA`, `PALETTE_AREA`, `KEYBINDS_AREA`, `THEMES_AREA`, `COMPOSER_AREAS`, `SESSION_ROW_AREAS`, `SIDEBAR_NAV_PREFS_AREA`, `APPEARANCE_AREAS`
+`PANES_AREA`, `ROUTES_AREA`, `SIDEBAR_NAV_AREA`, `STATUSBAR_AREAS`, `TITLEBAR_AREAS`, `WORKSPACE_PAGE_HEADER_AREA`, `PALETTE_AREA`, `KEYBINDS_AREA`, `THEMES_AREA`, `COMPOSER_AREAS`, `MODEL_MENU_ROW_AREA`, `SESSION_ROW_AREAS`, `SIDEBAR_NAV_PREFS_AREA`, `APPEARANCE_AREAS`, `SETTINGS_PLUGINS_AREA`
 
 Area payloads
 
-`RouteContribution`, `SidebarNavContribution`, `StatusbarItem`, `TitlebarTool`, `PaletteContribution`, `KeybindContribution`, `ComposerMiddleware`, `ComposerAttachmentProvider`, `SessionRowSlotContribution`, `SidebarNavPrefsContribution`
+`PluginSettingsPage`, `PluginSettingsSubpage` (+ `pluginSettingsHref`), `RouteContribution`, `SidebarNavContribution`, `StatusbarItem`, `TitlebarTool`, `PaletteContribution`, `KeybindContribution`, `ComposerMiddleware`, `ComposerAttachmentProvider`, `SessionRowSlotContribution`, `SidebarNavPrefsContribution`
 
 React / state
 
