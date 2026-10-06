@@ -1,0 +1,19 @@
+# Labeler config — the Labeler workflow referenced this file but it did not
+# exist, so every run failed with "HttpError: Not Found".
+# Docs: https://github.com/actions/labeler
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file: ['**/*.md', 'docs/**']
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file: ['.github/workflows/**', '.github/actions/**']
+
+data:
+  - changed-files:
+      - any-glob-to-any-file: ['data/**']
+
+site:
+  - changed-files:
+      - any-glob-to-any-file: ['index.html', 'ecosystem/**', 'projects/**', 'lists/**', 'assets/**']
