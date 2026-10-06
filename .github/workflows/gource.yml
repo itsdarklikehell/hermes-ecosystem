@@ -19,20 +19,23 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Input names must match the action's own schema exactly. The previous
+      # hyphenated names (gource-video-length, hide-mouse, camera-mode, ...)
+      # were not recognised, so every one of them was silently dropped and the
+      # render ran with defaults.
       - name: Generate Gource video
         uses: nbprojekt/gource-action@v1.3.0
         with:
-          gource-video-length: 60
-          gource-title: 'Hermes Atlas development timeline'
-          hide-mouse: true
-          hide-date: true
-          hide-filenames: true
-          auto-rotate: true
-          camera-mode: overview
+          gource_title: 'Hermes Atlas development timeline'
+          gource_camera_mode: 'overview'
+          gource_hide_items: 'mouse,date,filenames'
+          gource_key: 'true'
+          gource_seconds_per_day: '1.0'
 
-      # The re-encode step below shells out to ffmpeg. Do not rely on it being
-      # present in the runner image — install it explicitly so the step cannot
-      # fail with "ffmpeg: command not found" (exit 127).
+      # The action writes its result to gource/gource.mp4 (not ./gource.mp4).
+      # Do not rely on ffmpeg being present in the runner image either —
+      # install it explicitly so the step cannot fail with
+      # "ffmpeg: command not found" (exit 127).
       - name: Install ffmpeg
         run: |
           sudo apt-get update
@@ -41,7 +44,8 @@ jobs:
 
       - name: Re-encode with ffmpeg
         run: |
-          ffmpeg -y -i gource.mp4 -c:v libx264 -preset slow -crf 18 \
+          test -f gource/gource.mp4
+          ffmpeg -y -i gource/gource.mp4 -c:v libx264 -preset slow -crf 18 \
             -pix_fmt yuv420p -vf "scale=1920:1080" \
             -c:a aac -b:a 192k -movflags +faststart \
             hermes-ecosystem_gource_1080p.mp4
