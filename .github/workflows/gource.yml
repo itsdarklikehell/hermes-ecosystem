@@ -4,8 +4,9 @@ on:
   workflow_dispatch:
   schedule:
     - cron: '0 0 * * 0'  # weekly
-  push:
-    branches: [ main ]
+  # No `push` trigger: build-pages commits generated artifacts to main daily,
+  # and every one of those pushes re-rendered the whole timeline. The render is
+  # expensive and its output only changes meaningfully week to week.
 
 jobs:
   gource:
@@ -28,6 +29,15 @@ jobs:
           hide-filenames: true
           auto-rotate: true
           camera-mode: overview
+
+      # The re-encode step below shells out to ffmpeg. Do not rely on it being
+      # present in the runner image — install it explicitly so the step cannot
+      # fail with "ffmpeg: command not found" (exit 127).
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          ffmpeg -version | head -1
 
       - name: Re-encode with ffmpeg
         run: |
