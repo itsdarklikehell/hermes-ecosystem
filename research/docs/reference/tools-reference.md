@@ -268,7 +268,7 @@ Write content to a file, completely replacing existing content. Use this instead
 
 —
 
-For local files, a full unredacted read (including all pages of the same file version) or a successful `write_file` supplies a whole-file baseline. Reading a smaller region afterward does not discard that baseline while the bytes remain unchanged. A changed file, an unread file, or a view with hidden/redacted or clamped content still needs a full current read before replacement; `patch` remains available for targeted edits. Writes made through terminal commands or `execute_code` do not establish a `write_file` baseline.
+For local files, a full unredacted read (including all pages of the same file version), a successful `write_file`, or your own `patch` of a file you had read in full supplies a whole-file baseline. Reading a smaller region afterward does not discard that baseline while the bytes remain unchanged. A file changed by another writer, an unread file, a file patched without a full read, or a view with hidden/redacted or clamped content still needs a full current read before replacement; `patch` remains available for targeted edits. Writes made through terminal commands or `execute_code` do not establish a `write_file` baseline.
 
 ## `computer_use` toolset
 
